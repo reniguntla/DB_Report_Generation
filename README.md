@@ -8,6 +8,7 @@ This repository contains a Streamlit application that turns natural-language que
 - Ollama integration for SQL generation and result summarization.
 - PostgreSQL schema extraction so the model receives table, column, key, and relationship context.
 - Read-only SQL validation to block destructive or multi-statement queries.
+- Resilient model-response parsing that can recover SQL from markdown fences or non-JSON fallback output.
 - Query history and optional SQL transparency for end users.
 
 ## Getting Started
@@ -48,7 +49,7 @@ This repository contains a Streamlit application that turns natural-language que
 
 1. The app connects to PostgreSQL and introspects user schemas, columns, descriptions, primary keys, and foreign keys.
 2. The schema metadata is formatted into a prompt and sent to the local Phi-3 model using Ollama.
-3. The model returns JSON containing a SQL query and rationale.
+3. The model is instructed to return JSON, but the app can also recover SQL from markdown-fenced or plain SQL fallback responses.
 4. The app validates that the SQL is a single read-only statement before execution.
 5. The SQL runs against PostgreSQL in a read-only transaction.
 6. The result rows are shown in a table and summarized by the model for non-technical users.

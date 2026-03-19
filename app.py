@@ -8,13 +8,14 @@ import streamlit as st
 
 from db_utils import (
     DatabaseConfig,
+    DatabaseDependencyError,
     QueryValidationError,
     execute_read_only_query,
     fetch_schema_metadata,
     format_schema_for_prompt,
     validate_read_only_sql,
 )
-from llm_utils import LLMResponseError, generate_sql, summarize_results
+from llm_utils import LLMDependencyError, LLMResponseError, generate_sql, summarize_results
 
 st.set_page_config(page_title="Phi-3 PostgreSQL Query Assistant", page_icon="🗄️", layout="wide")
 
@@ -156,7 +157,7 @@ with results_tab:
                         "summary": summary.get("summary", ""),
                     },
                 )
-            except (QueryValidationError, LLMResponseError) as exc:
+            except (DatabaseDependencyError, LLMDependencyError, QueryValidationError, LLMResponseError) as exc:
                 st.error(f"Safety or model output validation failed: {exc}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Query execution failed: {exc}")

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
 import re
 from dataclasses import dataclass
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
-import sqlparse
+_PSYCOPG_SPEC = importlib.util.find_spec("psycopg")
+psycopg = importlib.import_module("psycopg") if _PSYCOPG_SPEC else None
+_dict_row = importlib.import_module("psycopg.rows").dict_row if _PSYCOPG_SPEC else None
+_SQLPARSE_SPEC = importlib.util.find_spec("sqlparse")
+sqlparse = importlib.import_module("sqlparse") if _SQLPARSE_SPEC else None
 
 FORBIDDEN_SQL_PATTERNS = [
     r"\bINSERT\b",
@@ -38,6 +42,10 @@ class DatabaseConfig:
 
 class QueryValidationError(ValueError):
     """Raised when the generated SQL query is considered unsafe."""
+
+
+class DatabaseDependencyError(RuntimeError):
+    """Raised when psycopg is unavailable in the local Python environment."""
 
 
 SCHEMA_QUERY = """
@@ -127,8 +135,12 @@ def build_connection_string(config: DatabaseConfig) -> str:
     )
 
 
-def get_connection(config: DatabaseConfig) -> psycopg.Connection:
-    return psycopg.connect(build_connection_string(config), row_factory=dict_row)
+def get_connection(config: DatabaseConfig) -> Any:
+    if psycopg is None or _dict_row is None:
+        raise DatabaseDependencyError(
+            "The 'psycopg' Python package is not installed. Install dependencies from requirements.txt before running the app."
+        )
+    return psycopg.connect(build_connection_string(config), row_factory=_dict_row)
 
 
 def fetch_schema_metadata(config: DatabaseConfig) -> list[dict[str, Any]]:
@@ -183,23 +195,44 @@ def format_schema_for_prompt(rows: list[dict[str, Any]]) -> str:
     return "\n\n".join(sections)
 
 
+def normalize_model_sql(query: str) -> str:
+    normalized = query.strip()
+    if normalized.startswith("```"):
+        fenced_match = re.search(r"```(?:sql)?\s*(.*?)```", normalized, flags=re.IGNORECASE | re.DOTALL)
+        if fenced_match:
+            normalized = fenced_match.group(1).strip()
+
+    normalized = normalized.rstrip(";")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 def validate_read_only_sql(query: str) -> str:
-    normalized = query.strip().rstrip(";")
+    normalized = normalize_model_sql(query)
     if not normalized:
         raise QueryValidationError("The model returned an empty SQL query.")
 
-    statements = sqlparse.parse(normalized)
-    if len(statements) != 1:
-        raise QueryValidationError("Only a single SQL statement is allowed.")
+    if sqlparse is not None:
+        statements = sqlparse.parse(normalized)
+        if len(statements) != 1:
+            raise QueryValidationError("Only a single SQL statement is allowed.")
 
-    first_token = next(
-        (token for token in statements[0].flatten() if not token.is_whitespace),
-        None,
-    )
-    if first_token is None:
-        raise QueryValidationError("The SQL query could not be parsed.")
+        first_token = next(
+            (token for token in statements[0].flatten() if not token.is_whitespace),
+            None,
+        )
+        if first_token is None:
+            raise QueryValidationError("The SQL query could not be parsed.")
 
-    if first_token.value.upper() not in {"SELECT", "WITH"}:
+        first_keyword = first_token.value.upper()
+    else:
+        if ";" in normalized:
+            raise QueryValidationError("Only a single SQL statement is allowed.")
+        match = re.match(r"^(SELECT|WITH)\b", normalized, flags=re.IGNORECASE)
+        if not match:
+            raise QueryValidationError("Only SELECT queries and CTEs that end in SELECT are allowed.")
+        first_keyword = match.group(1).upper()
+
+    if first_keyword not in {"SELECT", "WITH"}:
         raise QueryValidationError("Only SELECT queries and CTEs that end in SELECT are allowed.")
 
     upper_query = normalized.upper()
